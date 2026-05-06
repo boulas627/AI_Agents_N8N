@@ -1,0 +1,297 @@
+{
+  "name": "Email Assistant (Agentic v2)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 15
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [1200, 528],
+      "id": "bb13d471-5a7d-4842-a610-9f11da38eb1d",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "You are an email triage assistant. Today's date and time is {{ $now.format('EEEE, MMMM dd yyyy, HH:mm') }}.\n\nYour job:\n1. Use the Gmail tool to fetch recent emails from the inbox.\n2. Analyze each email and identify HIGH or MEDIUM priority emails based on these criteria:\n   - Contains 'BSSL' in subject or body → HIGH\n   - Related to application security meetups → HIGH\n   - Cybersecurity job opportunities → HIGH\n   - LinkedIn messages or notifications → MEDIUM\n   - Any email with an urgent deadline or action required within 24 hours → HIGH\n3. Optionally use the Google Calendar tool to check upcoming events if an email references a meeting or deadline, to assess urgency.\n4. Return a structured summary of ONLY the priority emails (ignore newsletters, automated alerts, and low-importance mail).\n\nFor each priority email return:\n- subject: the email subject\n- from: the sender name and email\n- snippet: a 1-2 sentence summary of the content\n- priority: HIGH or MEDIUM\n- reason: which criteria it matched and why it matters\n- action: what you recommend doing (reply, review, schedule, ignore)\n\nFormat your final response as valid JSON with this shape:\n{\n  \"priorityEmails\": [\n    {\n      \"subject\": \"...\",\n      \"from\": \"...\",\n      \"snippet\": \"...\",\n      \"priority\": \"HIGH\",\n      \"reason\": \"...\",\n      \"action\": \"...\"\n    }\n  ]\n}",
+        "options": {
+          "systemMessage": "You are a smart, concise email triage assistant for a busy professional working in cybersecurity. You have access to Gmail and Google Calendar tools. Always use the Gmail tool to fetch emails — never rely on memory alone. Be selective: only flag emails that genuinely need human attention. Respond ONLY with valid JSON in your final output — no preamble, no explanation, no markdown code fences."
+        }
+      },
+      "id": "7b21b45b-b28c-4d5e-8cbf-1013d5234199",
+      "name": "Email Priority Analyzer",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [1440, 528]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "id",
+          "value": "gpt-4o"
+        },
+        "builtInTools": {},
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "id": "a13fb3b9-b7db-463f-80c1-c4edf1a452fe",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [1296, 720],
+      "credentials": {
+        "openAiApi": {
+          "id": "6TuQlqkTYLWOu45y",
+          "name": "AI_Agent_Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "email-assistant-memory",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [1440, 720],
+      "id": "60745a4a-f16b-422b-aa71-96491cf73a22",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "sebastien627@gmail.com",
+          "mode": "list",
+          "cachedResultName": "sebastien627@gmail.com"
+        },
+        "operation": "getAll",
+        "timeMin": "={{ $now.toISO() }}",
+        "timeMax": "={{ $now.plus({ days: 7 }).toISO() }}",
+        "additionalFields": {
+          "maxResults": 10
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [1584, 720],
+      "id": "8291d160-deb0-4973-a1bc-d1f8ecc39624",
+      "name": "Get Calendar Events",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "3wUpILUi9jUtyb7H",
+          "name": "Google Calendar account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "filters": {
+          "labelIds": ["INBOX", "UNREAD"],
+          "maxResults": 50
+        }
+      },
+      "type": "n8n-nodes-base.gmailTool",
+      "typeVersion": 2.2,
+      "position": [1728, 720],
+      "id": "4ee86fbd-80ef-4674-9cab-cffc438a8079",
+      "name": "Get Inbox Emails",
+      "webhookId": "aa5e8d3b-f205-41ba-b8d3-4e56a1b1e4cc",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "pr9kfodBcYWtq7oo",
+          "name": "Gmail account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the agent's JSON output\nlet agentOutput = $input.first().json.output || '';\n\n// Strip markdown fences if present\nagentOutput = agentOutput.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n\nlet parsed;\ntry {\n  parsed = JSON.parse(agentOutput);\n} catch (e) {\n  // Fallback: return empty result with error note\n  parsed = { priorityEmails: [], parseError: agentOutput };\n}\n\nconst priorityEmails = parsed.priorityEmails || [];\nconst highPriority = priorityEmails.filter(e => e.priority === 'HIGH');\nconst mediumPriority = priorityEmails.filter(e => e.priority === 'MEDIUM');\n\nconst timestamp = new Date().toLocaleString('en-US', {\n  dateStyle: 'full',\n  timeStyle: 'short'\n});\n\nconst priorityColor = { HIGH: '#dc3545', MEDIUM: '#e67e22' };\nconst priorityIcon = { HIGH: '🔴', MEDIUM: '🟡' };\n\nfunction formatCard(email) {\n  const color = priorityColor[email.priority] || '#999';\n  const icon = priorityIcon[email.priority] || '⚪';\n  return `\n    <div style=\"margin-bottom: 20px; padding: 16px 20px; border-left: 5px solid ${color}; background: #fff; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);\">\n      <div style=\"display:flex; align-items:center; gap:8px; margin-bottom:8px;\">\n        <span style=\"font-size:16px;\">${icon}</span>\n        <h3 style=\"margin:0; color:#1a1a1a; font-size:15px;\">${email.subject || '(No subject)'}</h3>\n      </div>\n      <p style=\"margin:4px 0; color:#555; font-size:13px;\"><strong>From:</strong> ${email.from || 'Unknown'}</p>\n      <p style=\"margin:4px 0; color:#555; font-size:13px;\"><strong>Summary:</strong> ${email.snippet || ''}</p>\n      <p style=\"margin:4px 0; color:#555; font-size:13px;\"><strong>Why flagged:</strong> ${email.reason || ''}</p>\n      <p style=\"margin:4px 0; font-size:13px;\"><strong style=\"color:${color}\">Recommended action:</strong> ${email.action || ''}</p>\n    </div>\n  `;\n}\n\nlet htmlBody = `\n<!DOCTYPE html>\n<html>\n<head><meta charset=\"UTF-8\"></head>\n<body style=\"font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; max-width: 700px; margin: 0 auto; padding: 24px; background: #f5f5f5;\">\n\n  <div style=\"background: linear-gradient(135deg, #1a73e8, #0d47a1); color: white; padding: 24px; border-radius: 8px; margin-bottom: 24px;\">\n    <h1 style=\"margin: 0 0 8px 0; font-size: 22px;\">📧 Priority Email Summary</h1>\n    <p style=\"margin: 0; opacity: 0.9; font-size: 13px;\">Generated: ${timestamp}</p>\n    <p style=\"margin: 8px 0 0 0; font-size: 14px;\">\n      <strong>${highPriority.length}</strong> High Priority &nbsp;·&nbsp;\n      <strong>${mediumPriority.length}</strong> Medium Priority\n    </p>\n  </div>\n`;\n\nif (priorityEmails.length === 0) {\n  htmlBody += `<div style=\"text-align:center; padding:40px; background:#fff; border-radius:8px; color:#666;\">✅ No priority emails found in this batch.</div>`;\n} else {\n  if (highPriority.length > 0) {\n    htmlBody += `\n    <div style=\"margin-bottom: 28px;\">\n      <h2 style=\"color: #dc3545; font-size: 16px; border-bottom: 2px solid #dc3545; padding-bottom: 8px; margin-bottom: 16px;\">🔴 HIGH Priority (${highPriority.length})</h2>\n      ${highPriority.map(formatCard).join('')}\n    </div>`;\n  }\n\n  if (mediumPriority.length > 0) {\n    htmlBody += `\n    <div style=\"margin-bottom: 28px;\">\n      <h2 style=\"color: #e67e22; font-size: 16px; border-bottom: 2px solid #e67e22; padding-bottom: 8px; margin-bottom: 16px;\">🟡 MEDIUM Priority (${mediumPriority.length})</h2>\n      ${mediumPriority.map(formatCard).join('')}\n    </div>`;\n  }\n}\n\nhtmlBody += `\n  <div style=\"margin-top: 32px; padding: 14px; background: #e8eaf6; border-radius: 6px; text-align: center;\">\n    <p style=\"margin: 0; color: #555; font-size: 12px;\">Automatically generated by your Email Assistant AI Agent</p>\n  </div>\n</body>\n</html>`;\n\nreturn [{ json: { htmlBody, totalHigh: highPriority.length, totalMedium: mediumPriority.length } }];"
+      },
+      "id": "c354469d-67ae-41fc-88e4-4942ea3377b9",
+      "name": "Format Email Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 528]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-priority-emails",
+              "leftValue": "={{ $json.totalHigh + $json.totalMedium }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e1a2b3c4-d5e6-7890-abcd-ef1234567890",
+      "name": "Has Priority Emails?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.1,
+      "position": [1900, 528]
+    },
+    {
+      "parameters": {
+        "sendTo": "sebastien627@gmail.com",
+        "subject": "=🔴 Priority Email Summary - {{ $now.format('MMM dd, yyyy') }} ({{ $json.totalHigh }} High, {{ $json.totalMedium }} Medium)",
+        "message": "={{ $json.htmlBody }}",
+        "options": {
+          "isHtml": true
+        }
+      },
+      "id": "bf87e945-20ab-41b7-9e3f-163bc41bfb94",
+      "name": "Send Email Summary",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [2140, 448],
+      "webhookId": "949312f8-f458-43d9-a6a6-7797046336c7",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "pr9kfodBcYWtq7oo",
+          "name": "Gmail account 3"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "no-email-end",
+      "name": "No Priority Emails - Stop",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2140, 640]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Email Priority Analyzer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Email Priority Analyzer",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Email Priority Analyzer",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Calendar Events": {
+      "ai_tool": [
+        [
+          {
+            "node": "Email Priority Analyzer",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Inbox Emails": {
+      "ai_tool": [
+        [
+          {
+            "node": "Email Priority Analyzer",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Priority Analyzer": {
+      "main": [
+        [
+          {
+            "node": "Format Email Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Email Summary": {
+      "main": [
+        [
+          {
+            "node": "Has Priority Emails?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Priority Emails?": {
+      "main": [
+        [
+          {
+            "node": "Send Email Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Priority Emails - Stop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "a1b2c3d4-e5f6-7890-abcd-ef1234567891",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b1aaca28dfecd99fa81de5d393914c0a7fbbe7c8e85b86359f32ce6e8f0bcd8d"
+  },
+  "id": "2gMMBshJTdXrWV6w",
+  "tags": []
+}
